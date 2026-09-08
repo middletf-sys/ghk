@@ -151,7 +151,8 @@
       cursor: pointer;
       font-size: 0.8rem;
       box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
-      transition: transform 0.1s ease, filter 0.15s ease;
+      transition: transform 0.08s ease, filter 0.15s ease;
+      user-select: none;
     }
 
     .stim-btn:hover {
@@ -159,7 +160,7 @@
     }
 
     .stim-btn:active {
-      transform: scale(0.96);
+      transform: scale(0.94);
     }
 
     .toolbar-divider {
@@ -294,7 +295,7 @@
 <div class="container">
   <header>
     <h1>Membrane Voltage Oscilloscope (GHK)</h1>
-    <p class="subtitle">Fires an Action Potential whenever voltage crosses the -55 mV threshold</p>
+    <p class="subtitle">Click "⚡ Stimulate" rapidly to demonstrate temporal summation past the -55 mV threshold</p>
   </header>
 
   <!-- Oscilloscope Canvas Area -->
@@ -314,7 +315,8 @@
       <span class="speed-badge" id="speed_badge">1.00×</span>
     </div>
 
-    <button class="stim-btn" onclick="injectDepolarization()">⚡ Stimulate (+15 mV)</button>
+    <!-- Rapid click enables temporal summation -->
+    <button class="stim-btn" onclick="injectDepolarization()">⚡ Stimulate (+5 mV)</button>
 
     <div class="toolbar-divider"></div>
 
@@ -330,7 +332,7 @@
     </label>
   </div>
 
-  <!-- Presets (Numerical voltage labels removed from buttons) -->
+  <!-- Presets -->
   <div class="preset-bar">
     <span style="font-size: 0.8rem; color: var(--text-muted); margin-right: 0.5rem;">Presets:</span>
     <button class="preset-btn" onclick="applyPreset('mammal')">Mammalian Standard</button>
@@ -409,7 +411,7 @@
   const T = 37 + 273.15;
   const factor = (R * T / F) * 1000;
 
-  const THRESHOLD_MV = -55.0; // Threshold potential
+  const THRESHOLD_MV = -55.0; // Action Potential firing threshold
   const AP_DURATION = 0.50;   // Spike duration
   const history = [];
 
@@ -419,7 +421,7 @@
 
   let apActive = false;
   let apStartTime = -999;
-  let stimOffset = 0.0;
+  let stimOffset = 0.0; // Dynamic accumulative EPSP voltage
 
   const canvas = document.getElementById('scopeCanvas');
   const ctx = canvas.getContext('2d');
@@ -438,8 +440,9 @@
     liveSub.textContent = `Speed: ${speedStr}`;
   }
 
+  // Summates EPSPs: each click adds +5.0 mV on top of the current decay state
   function injectDepolarization() {
-    stimOffset = 15.0;
+    stimOffset += 5.0;
   }
 
   const presets = {
@@ -489,7 +492,8 @@
     document.getElementById('cl_out_val').textContent = `${cl_out} mM`;
     document.getElementById('p_cl_val').textContent = p_cl.toFixed(2);
 
-    if (stimOffset > 0.01) {
+    // Passive membrane exponential EPSP decay (tau ~ 125ms)
+    if (stimOffset > 0.005) {
       stimOffset *= Math.exp(-deltaSimSec * 8.0);
     } else {
       stimOffset = 0.0;
@@ -499,18 +503,19 @@
     const theoreticalPeak = solveGHK(k_in, k_out, p_k, na_in, na_out, p_na + 18.0, cl_in, cl_out, p_cl);
     const theoreticalAhp = solveGHK(k_in, k_out, p_k + 3.0, na_in, na_out, p_na * 0.5, cl_in, cl_out, p_cl);
 
-    // Toolbar legend numbers only
     document.getElementById('label_rest').textContent = `${baselineVm >= 0 ? '+' : ''}${baselineVm.toFixed(1)} mV`;
     document.getElementById('label_peak').textContent = `${theoreticalPeak >= 0 ? '+' : ''}${theoreticalPeak.toFixed(1)} mV`;
     document.getElementById('label_ahp').textContent = `${theoreticalAhp >= 0 ? '+' : ''}${theoreticalAhp.toFixed(1)} mV`;
 
     let preVm = baselineVm + stimOffset;
 
+    // Trigger action potential when summated potential crosses -55 mV
     if (pulseToggle.checked) {
       const isRefractory = (simTime - apStartTime) < (AP_DURATION + 0.15);
       if (!isRefractory && preVm >= THRESHOLD_MV) {
         apActive = true;
         apStartTime = simTime;
+        stimOffset = 0.0; // Reset stimulus offset once all-or-none spike engages
       }
     } else {
       apActive = false;
@@ -539,7 +544,7 @@
       }
     }
 
-    let Vm = solveGHK(k_in, k_out, p_k, na_in, na_out, p_na, cl_in, cl_out, p_cl) + stimOffset;
+    let Vm = solveGHK(k_in, k_out, p_k, na_in, na_out, p_na, cl_in, cl_out, p_cl) + (apActive ? 0 : stimOffset);
 
     const Ek = factor * Math.log(k_out / k_in);
     const Ena = factor * Math.log(na_out / na_in);
@@ -717,7 +722,6 @@
           }
           if (isMax && pt.phase === 'peak' && vm > (THRESHOLD_MV + 10)) {
             if (!peaks.some(p => Math.abs(p.point.time - pt.time) < 0.25)) {
-              // Find baseline point directly preceding this specific peak's upstroke
               let basePt = null;
               for (let k = i - 1; k >= 0; k--) {
                 if (history[k].phase === 'baseline' && Math.abs(history[k].vm - baselineVm) < 1.0) {
@@ -747,7 +751,6 @@
           const peakX = ((pt.time - windowStart) / windowSec) * width;
           const peakY = getY(pt.vm, height);
 
-          // Render baseline green rectangle in front of this peak
           if (item.baselinePoint) {
             const baseX = ((item.baselinePoint.time - windowStart) / windowSec) * width;
             const baseY = getY(item.baselinePoint.vm, height);
@@ -756,7 +759,6 @@
             }
           }
 
-          // Render peak red rectangle
           if (peakX >= 20 && peakX <= width - 30) {
             drawLandmarkTag(peakX, peakY, `${pt.vm >= 0 ? '+' : ''}${pt.vm.toFixed(1)} mV`, '#ef4444', true);
           }
